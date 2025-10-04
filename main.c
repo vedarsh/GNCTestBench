@@ -2,10 +2,9 @@
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "QMC5883L/qmc5883l.h"
+#include "DS3231/ds3231.h"
+#include "NEOM8N/neom8n.h"
 
-// I2C defines
-// This example will use I2C0 on GPIO8 (SDA) and GPIO9 (SCL) running at 400KHz.
-// Pins can be changed, see the GPIO function select table in the datasheet for information on GPIO assignments
 #define I2C_PORT i2c0
 
 #define I2C_SDA 1
@@ -13,6 +12,9 @@
 
 qmc_5883_mag_read_t mag;
 int16_t temp;
+
+#define NEOM8N_UART_TX_PIN 12
+#define NEOM8N_UART_RX_PIN 13
 
 void init_i2c() {
 
@@ -26,6 +28,20 @@ void init_i2c() {
     gpio_pull_up(I2C_SCL);
 
 }
+
+void init_uart() {
+
+    // Initialize UART
+    uart_init(uart0, 9600);
+
+    // Set up GPIO pins for UART
+    gpio_set_function(NEOM8N_UART_TX_PIN, GPIO_FUNC_UART);
+    gpio_set_function(NEOM8N_UART_RX_PIN, GPIO_FUNC_UART);
+    uart_set_hw_flow(uart0, false, false);
+    uart_set_format(uart0, 8, 1, UART_PARITY_NONE);
+    uart_set_fifo_enabled(uart0, true);  
+}
+
 
 int main()
 {

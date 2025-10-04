@@ -11,7 +11,7 @@ int i2c_read_register(i2c_inst_t *i2c, uint8_t addr,uint8_t reg, uint8_t *buf, s
 
     if (i2c_read_blocking(i2c, addr, buf, len, false) != (int)len) {
 
-        return false; // failed to read expected number of bytes
+        return false;
     }
 
     return true;

@@ -63,7 +63,8 @@ target_include_directories(GNCTestBench
 # Add any user requested libraries
 target_link_libraries(GNCTestBench 
         hardware_i2c
-        
+        hardware_uart
+        hardware_dma
         )
 
 pico_add_extra_outputs(GNCTestBench)
