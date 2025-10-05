@@ -1,13 +1,18 @@
 #include <stdio.h>
 #include <string.h>
+
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
+
 #include "QMC5883L/qmc5883l.h"
 #include "DS3231/ds3231.h"
-#include "hardware/dma.h"
 #include "MPU6050/mpu6050.h"
 #include "NEOM8N/neom8n.h"
 
+/*
+Initialise I2C0 on GPIO pins 0 (SCL) and 1 (SDA) for 400kHz operation
+Initialise UART0 on GPIO pins 12 (TX) and 13 (RX) for 9600 baud operation
+*/
 #define I2C_PORT i2c0
 
 #define I2C_SDA 1
@@ -18,16 +23,14 @@
 
 #define NEOM8N_UART_BAUDRATE 115200
 
-#define NMEA_BUFFER_SIZE 128
-#define NMEA_NUM_PREFIXES 3
+/*
+Structure to hold a complete telemetry packet. This includes:
+- Magnetometer data from QMC5883L
+- Time data from DS3231 RTC
+- GPS data from NEOM8N (GNRMC, GNGGA, GNVTG sentences)  
 
-const char *nmea_prefixes[NMEA_NUM_PREFIXES] = {
-    "$GNRMC", "$GNGGA", "$GNVTG"
-};
-volatile uint8_t nmea_rx_buffer[NMEA_BUFFER_SIZE];
-volatile uint16_t nmea_index = 0;
-volatile bool nmea_data_ready = false;
-
+enum to track which device's data to read next in a non-blocking manner for round-robin scheduling.
+*/
 typedef struct TLM_packet
 {
     qmc_5883_mag_read_t mag;
@@ -59,19 +62,44 @@ void init_i2c() {
 
 }
 
+/*
+Define a buffer to hold incoming NMEA sentences.
+Use an interrupt-driven approach to fill the buffer as data arrives.
+Once a full sentence is received (ending with \n), set a flag to indicate data is ready for processing. 
+*/
+#define NMEA_BUFFER_SIZE 128
+#define NMEA_NUM_PREFIXES 3
+
+const char *nmea_prefixes[NMEA_NUM_PREFIXES] = {
+    "$GNRMC", "$GNGGA", "$GNVTG"
+};
+volatile uint8_t nmea_rx_buffer[NMEA_BUFFER_SIZE];
+volatile uint16_t nmea_index = 0;
+volatile bool nmea_data_ready = false;
+
+/*
+Interrupt handler for UART data reception
+This function is called whenever data is available on the UART.
+It checks for known NMEA sentence prefixes and fills the buffer accordingly.
+matches prefixes in a case-sensitive manner.
+nmea_receiving_flag is a flag indicating if we are currently receiving a sentence.
+*/
+
 static int matched_prefix = -1;
-static bool receiving = false;
+static bool nmea_receiving_flag = false;
+
+//max prefix length for any starting code is 6
 
 #define MAX_PREFIX_LEN 6
 
-// per-prefix match lengths
+//TODO: optimize this with a trie or state machine if needed
 static uint8_t prefix_match_len[NMEA_NUM_PREFIXES] = {0};
 
 void uart0_irq_routine(void) {
     while (uart_is_readable(uart0)) {
         uint8_t ch = uart_getc(uart0);
 
-        if (!receiving) {
+        if (!nmea_receiving_flag) {
             bool any_match = false;
 
             for (int i = 0; i < NMEA_NUM_PREFIXES; i++) {
@@ -85,7 +113,7 @@ void uart0_irq_routine(void) {
                     if (prefix_match_len[i] == strlen(prefix)) {
                         // Full prefix matched
                         matched_prefix = i;
-                        receiving = true;
+                        nmea_receiving_flag = true;
                         nmea_index = 0;
                         memcpy((void*)nmea_rx_buffer, prefix, prefix_match_len[i]);
                         nmea_index = prefix_match_len[i];
@@ -106,19 +134,19 @@ void uart0_irq_routine(void) {
             }
 
         } else {
-            // Receiving sentence
+            // nmea_receiving_flag sentence
             if (nmea_index < NMEA_BUFFER_SIZE - 1) {
                 nmea_rx_buffer[nmea_index++] = ch;
 
                 if (ch == '\n') {
                     nmea_rx_buffer[nmea_index] = '\0';
                     nmea_data_ready = true;
-                    receiving = false;
+                    nmea_receiving_flag = false;
                     matched_prefix = -1;
                 }
             } else {
                 // overflow
-                receiving = false;
+                nmea_receiving_flag = false;
                 nmea_index = 0;
                 matched_prefix = -1;
                 for (int i = 0; i < NMEA_NUM_PREFIXES; i++) prefix_match_len[i] = 0;
@@ -126,6 +154,13 @@ void uart0_irq_routine(void) {
         }
     }
 }
+
+/*
+initialize UART0 for NEOM8N communication
+Set up GPIO pins, baud rate, and interrupt handler.
+Speed is set to 9600 baud as per NEOM8N default.
+the frame is 8-N-1 (8 data bits, no parity, 1 stop bit)
+*/
 
 void init_uart() 
 {
@@ -145,6 +180,25 @@ void init_uart()
     uart_set_irq_enables(uart0, true, false);
 }
 
+
+/*
+
+Round-robin non-blocking telemetry packet assembly
+Each call to this function reads data from one device in a round-robin manner.
+This ensures that no single device blocks the others, allowing for efficient data collection.
+The function updates the provided TLM_packet_t structure with the latest data from the selected device.
+
+The order of device reading is:
+1. GPS (NEOM8N)
+2. Magnetometer (QMC5883L)
+3. RTC (DS3231)
+4. IMU - Placeholder for future implementation
+
+This returns a packet with the latest data from all devices.
+
+This packet needs to be serealized and sent to core 2 for processing.
+
+*/
 current_device_t current_device = DEV_GPS;
 
 void telemetry_non_blocking_packet(TLM_packet_t* tlm_packet)
@@ -158,7 +212,7 @@ void telemetry_non_blocking_packet(TLM_packet_t* tlm_packet)
                 // Copy to local buffer to prevent ISR overwrite
                 char nmea_sentence[NMEA_BUFFER_SIZE];
                 memcpy(nmea_sentence, (const void*)nmea_rx_buffer, nmea_index);
-                printf("Received NMEA: %s\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n", nmea_sentence);
+
                 nmea_type_t type = nmea_parse_sentence(nmea_sentence, &tlm_packet->gnrmc, &tlm_packet->gngga, &tlm_packet->gnvtg);
 
                 nmea_index = 0; // Reset buffer index for next sentence
@@ -203,22 +257,7 @@ int main()
     while (true) 
     {
         telemetry_non_blocking_packet(&tlm_packet);
-
-        printf("Mag: X=%d Y=%d Z=%d | ", tlm_packet.mag.mag_x, tlm_packet.mag.mag_y, tlm_packet.mag.mag_z);
-        printf("RTC: %02d:%02d:%02d %02d/%02d/%04d | ", tlm_packet.timeframe.time.hour, tlm_packet.timeframe.time.minute, tlm_packet.timeframe.time.second,
-               tlm_packet.timeframe.time.day, tlm_packet.timeframe.time.month, tlm_packet.timeframe.time.year);
-        printf("GNRMC: Time=%s Status=%c Lat=%s %c Lon=%s %c Speed=%.2f Course=%.2f Date=%s | ",
-               tlm_packet.gnrmc.utc_time, tlm_packet.gnrmc.status, tlm_packet.gnrmc.lat, tlm_packet.gnrmc.ns,
-               tlm_packet.gnrmc.lon, tlm_packet.gnrmc.ew, tlm_packet.gnrmc.speed_knots,
-               tlm_packet.gnrmc.course_deg, tlm_packet.gnrmc.date);
-        printf("GNGGA: Time=%s Lat=%.6f %c Lon=%.6f %c Fix=%d Sats=%d HDOP=%.1f Alt=%.1f | ",
-               tlm_packet.gngga.utc_time, tlm_packet.gngga.lat, tlm_packet.gngga.ns,
-               tlm_packet.gngga.lon, tlm_packet.gngga.ew, tlm_packet.gngga.fix_quality,
-               tlm_packet.gngga.num_satellites, tlm_packet.gngga.hdop,
-               tlm_packet.gngga.altitude);
-        printf("GNVTG: CourseT=%.2f CourseM=%.2f SpeedKnots=%.2f SpeedKmh=%.2f\n",
-               tlm_packet.gnvtg.course_true, tlm_packet.gnvtg.course_magnetic,
-               tlm_packet.gnvtg.speed_knots, tlm_packet.gnvtg.speed_kmh);
+        //TODO serialize and send tlm_packet to core 2 for processing
     }
 
 }
