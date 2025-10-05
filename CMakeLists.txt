@@ -37,7 +37,8 @@ pico_sdk_init()
 
 add_executable(GNCTestBench 
                 main.c
-                drivers/QMC5883L/qmc5883l.c  )
+                drivers/QMC5883L/qmc5883l.c 
+                drivers/DS3231/ds3231.c )
 
 pico_set_program_name(GNCTestBench "GNCTestBench")
 pico_set_program_version(GNCTestBench "0.1")

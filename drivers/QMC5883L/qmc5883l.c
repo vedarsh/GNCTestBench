@@ -2,7 +2,7 @@
 
 // #define DEBUG
 
-int i2c_read_register(i2c_inst_t *i2c, uint8_t addr,uint8_t reg, uint8_t *buf, size_t len) {
+static inline bool i2c_read_register(i2c_inst_t *i2c, uint8_t addr,uint8_t reg, uint8_t *buf, size_t len) {
 
     if (i2c_write_blocking(i2c, addr, &reg, 1, true) != 1) {
 
@@ -17,7 +17,7 @@ int i2c_read_register(i2c_inst_t *i2c, uint8_t addr,uint8_t reg, uint8_t *buf, s
     return true;
 }
 
-bool i2c_write_register(i2c_inst_t *i2c, uint8_t addr, uint8_t reg, const uint8_t *data, size_t len) 
+static inline bool i2c_write_register(i2c_inst_t *i2c, uint8_t addr, uint8_t reg, const uint8_t *data, size_t len) 
 {
 
     uint8_t buf[len + 1];

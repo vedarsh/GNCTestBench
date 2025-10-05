@@ -1,6 +1,6 @@
 #include "ds3231.h"
 
-bool i2c_read_register(i2c_inst_t *i2c, uint8_t addr,uint8_t reg, uint8_t *buf, size_t len) {
+static inline bool i2c_read_register(i2c_inst_t *i2c, uint8_t addr,uint8_t reg, uint8_t *buf, size_t len) {
 
     if (i2c_write_blocking(i2c, addr, &reg, 1, true) != 1) {
 
@@ -15,7 +15,7 @@ bool i2c_read_register(i2c_inst_t *i2c, uint8_t addr,uint8_t reg, uint8_t *buf, 
     return true;
 }
 
-bool i2c_write_register(i2c_inst_t *i2c, uint8_t addr, uint8_t reg, const uint8_t *data, size_t len) 
+static inline bool i2c_write_register(i2c_inst_t *i2c, uint8_t addr, uint8_t reg, const uint8_t *data, size_t len) 
 {
 
     uint8_t buf[len + 1];
@@ -115,7 +115,7 @@ rtc_state_t ds3231_read_time(i2c_inst_t *i2c, timeframe_rtc_t *timeframe)
 
 // Write time to the DS3231 RTC
 
-rtc_state_t ds3231_set_time(i2c_inst_t *i2c, const timeframe_rtc_t *timeframe)
+rtc_state_t ds3231_set_time(i2c_inst_t *i2c, timeframe_rtc_t *timeframe)
 {
     uint8_t buf[7];
     uint8_t reg = DS3231_REG_TIME;
@@ -124,7 +124,7 @@ rtc_state_t ds3231_set_time(i2c_inst_t *i2c, const timeframe_rtc_t *timeframe)
     buf[0] = ((timeframe->time.second / 10) << 4) | (timeframe->time.second % 10);
     buf[1] = ((timeframe->time.minute / 10) << 4) | (timeframe->time.minute % 10);
     buf[2] = ((timeframe->time.hour / 10) << 4) | (timeframe->time.hour % 10);
-    buf[3] = 0; // Day of week is not used
+    buf[3] = 0;
     buf[4] = ((timeframe->time.day / 10) << 4) | (timeframe->time.day % 10);
     buf[5] = ((timeframe->time.month / 10) << 4) | (timeframe->time.month % 10);
     buf[6] = (((timeframe->time.year - 2000) / 10) << 4) | ((timeframe->time.year - 2000) % 10); // Assuming 21st century

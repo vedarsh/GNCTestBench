@@ -65,3 +65,7 @@ typedef enum rtc_state {
 #define DS3231_STATUS_A2F   0x02 // Alarm 2 flag
 #define DS3231_STATUS_A1F   0x01 // Alarm 1 flag
 
+rtc_state_t ds3231_init(i2c_inst_t *i2c);
+rtc_state_t ds3231_read_time(i2c_inst_t *i2c, timeframe_rtc_t *timeframe);
+rtc_state_t ds3231_set_time(i2c_inst_t *i2c,  timeframe_rtc_t *timeframe);
+rtc_state_t ds3231_read_temperature(i2c_inst_t *i2c, float *temperature);
