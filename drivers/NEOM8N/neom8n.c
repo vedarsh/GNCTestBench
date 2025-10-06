@@ -4,7 +4,14 @@
 #include <math.h>
 #include "neom8n.h"
 
-// Simple comma-splitter (no strtok)
+/*
+split_fields: Helper function to split NMEA sentence into fields
+Returns number of fields found, up to max_fields.
+Assumes fields array has space for max_fields pointers.
+
+TODO: handle edge cases like empty fields, checksum, etc.
+*/
+
 static int split_fields(char *sentence, char *fields[], int max_fields) {
     int count = 0;
     char *ptr = sentence;
@@ -15,6 +22,15 @@ static int split_fields(char *sentence, char *fields[], int max_fields) {
     }
     return count;
 }
+
+/*
+nmea_parse_sentence: Parse an NMEA sentence and populate the appropriate structure.
+Returns the type of sentence parsed, or NMEA_TYPE_UNKNOWN if unrecognized or error.
+Parses the following sentence types:
+- GNRMC: Recommended Minimum Specific GNSS Data
+- GNGGA: Global Positioning System Fix Data
+- GNVTG: Course Over Ground and Ground Speed
+*/
 
 nmea_type_t nmea_parse_sentence(char* sentence,
                                 nmea_gnrmc_t* rmc,

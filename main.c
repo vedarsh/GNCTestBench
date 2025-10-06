@@ -21,7 +21,7 @@ Initialise UART0 on GPIO pins 12 (TX) and 13 (RX) for 9600 baud operation
 #define NEOM8N_UART_TX_PIN 12
 #define NEOM8N_UART_RX_PIN 13
 
-#define NEOM8N_UART_BAUDRATE 115200
+#define NEOM8N_UART_BAUDRATE 9600
 
 /*
 Structure to hold a complete telemetry packet. This includes:
@@ -166,7 +166,7 @@ void init_uart()
 {
 
     // Initialize UART
-    uart_init(uart0, 9600);
+    uart_init(uart0, NEOM8N_UART_BAUDRATE);
 
     // Set up GPIO pins for UART
     gpio_set_function(NEOM8N_UART_TX_PIN, GPIO_FUNC_UART);
@@ -254,10 +254,11 @@ int main()
     mpu6050_data_t mpu_data;
     TLM_packet_t tlm_packet;
 
+    float temp;
+
     while (true) 
     {
         telemetry_non_blocking_packet(&tlm_packet);
-        //TODO serialize and send tlm_packet to core 2 for processing
     }
 
 }

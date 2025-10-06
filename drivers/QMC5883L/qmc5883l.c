@@ -2,6 +2,10 @@
 
 // #define DEBUG
 
+/*
+i2c read and write helper functions
+*/
+
 static inline bool i2c_read_register(i2c_inst_t *i2c, uint8_t addr,uint8_t reg, uint8_t *buf, size_t len) {
 
     if (i2c_write_blocking(i2c, addr, &reg, 1, true) != 1) {
@@ -79,7 +83,10 @@ mag_sensor_state_t qmc_5883l_init(i2c_inst_t *i2c)
     return SENSOR_OK;
 }
 
-// Read magnetometer data once the data is ready
+/*
+state machine to read magnetometer data when DRDY is set
+this checks if the data is ready and reads the values
+*/
 
 mag_sensor_state_t qmc5883l_read_mag_drdy(i2c_inst_t *i2c, qmc_5883_mag_read_t *mag)
 {

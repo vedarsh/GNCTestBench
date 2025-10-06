@@ -1,5 +1,10 @@
 #include "ds3231.h"
 
+
+/*
+i2c helper functions for reading and writing registers
+*/
+
 static inline bool i2c_read_register(i2c_inst_t *i2c, uint8_t addr,uint8_t reg, uint8_t *buf, size_t len) {
 
     if (i2c_write_blocking(i2c, addr, &reg, 1, true) != 1) {
@@ -86,7 +91,17 @@ rtc_state_t ds3231_init(i2c_inst_t *i2c)
     return RTC_OK;
 }
 
-// Read time from the DS3231 RTC
+/*
+reads time from the DS3231 RTC and fills the timeframe structure
+The time is converted from BCD to binary format
+Structure fields:
+second: 0-59
+minute: 0-59
+hour: 0-23
+day: 1-31
+month: 1-12
+year: 2000-2099
+*/
 
 rtc_state_t ds3231_read_time(i2c_inst_t *i2c, timeframe_rtc_t *timeframe)
 {
@@ -113,7 +128,16 @@ rtc_state_t ds3231_read_time(i2c_inst_t *i2c, timeframe_rtc_t *timeframe)
     return RTC_OK;
 }
 
-// Write time to the DS3231 RTC
+/*
+sets time to the DS3231 RTC from the timeframe structure
+The time is converted from binary to BCD format
+Structure fields:
+second: 0-59
+minute: 0-59
+hour: 0-23
+day: 1-31
+month: 1-12
+*/
 
 rtc_state_t ds3231_set_time(i2c_inst_t *i2c, timeframe_rtc_t *timeframe)
 {
