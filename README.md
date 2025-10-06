@@ -57,7 +57,3 @@ The workflow is as follows.
 1. Hard Iron calibration of the QMC5883L.
 2. Serialisation of the packet.
 3. Deserialisation of the packet in the second core.
-
-
-
-The main MCU is Pico.
