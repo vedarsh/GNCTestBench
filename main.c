@@ -623,7 +623,30 @@ void tlm_serialiser(TLM_packet_t* tlm_packet, TLM_serial_t* tlm_serial)
     tlm_serial->CRC16 = crc;
 }
 
+#define TX_POOL_SIZE 8
 
+static TLM_serial_t tx_pool[TX_POOL_SIZE];
+static volatile uint8_t tx_index = 0;
+
+void queue_tlm_to_core1(TLM_serial_t *src)
+{
+    uint8_t i = tx_index++ % TX_POOL_SIZE;
+
+    // Copy the entire struct, not just the packet field
+    memcpy(&tx_pool[i], src, sizeof(TLM_serial_t));
+
+    // Send pointer to other core
+    multicore_fifo_push_blocking((uint32_t)&tx_pool[i]);
+}
+
+void receive_tlm_to_core1(TLM_serial_t *dest)
+{
+    // Wait for pointer from other core
+    TLM_serial_t *src = (TLM_serial_t *)multicore_fifo_pop_blocking();
+
+    // Immediately copy to local memory (important!)
+    memcpy(dest, src, sizeof(TLM_serial_t));
+}
 
 /** @} */ // end of Telemetry group
 
@@ -675,20 +698,23 @@ int main(void) {
     
     // Perform critical GPS time synchronization
 
-    bool rtc_synced = sync_rtc_from_gps();
-    #ifdef DEBUG
-        if (!rtc_synced) {
-            printf("⚠ WARNING: Continuing without GPS time sync!\n");
-            printf("⚠ Time-critical operations may be affected\n");
+    // bool rtc_synced = sync_rtc_from_gps();
+    // #ifdef DEBUG
+    //     if (!rtc_synced) {
+    //         printf("⚠ WARNING: Continuing without GPS time sync!\n");
+    //         printf("⚠ Time-critical operations may be affected\n");
 
-        }
+    //     }
         
-        printf("=================================================\n\n");
-    #endif
+    //     printf("=================================================\n\n");
+    // #endif
     // Initialize telemetry packet
     TLM_packet_t tlm_packet = {0};
 	TLM_serial_t tlm_serial = {0};
     uint32_t loop_count = 0;
+
+	TLM_serial_t rcv_serial = {0};
+	TLM_serial_t rcv_packet = {0};
 	
 	/// Current device in round-robin schedule
 	static current_device_t current_device = DEV_GPS;
@@ -705,11 +731,64 @@ int main(void) {
 
 		tlm_serialiser(&tlm_packet, &tlm_serial);
 
-		multicore_fifo_push_blocking((uint32_t)&tlm_serial);
+		queue_tlm_to_core1(&tlm_serial);
 
+		receive_tlm_to_core1(&rcv_packet);
+
+                printf("\n========== RECEIVED PACKET # ==========\n", 
+                    loop_count / TELEMETRY_PRINT_INTERVAL);
+                
+                // RTC timestamp
+                printf("[RTC] %04d-%02d-%02d %02d:%02d:%02d %s\n",
+                    rcv_serial.packet.timeframe.time.year,
+                    rcv_serial.packet.timeframe.time.month,
+                    rcv_serial.packet.timeframe.time.day,
+                    rcv_serial.packet.timeframe.time.hour,
+                    rcv_serial.packet.timeframe.time.minute,
+                    rcv_serial.packet.timeframe.time.second,
+                    rcv_serial.packet.timeframe.time.is_time_synced ? "[SYNCED]" : "[NOT SYNCED]");
+                
+                // Magnetometer readings in raw counts
+                printf("[MAG] X:%d Y:%d Z:%d\n",
+                    rcv_serial.packet.mag.mag_x,
+                    rcv_serial.packet.mag.mag_y,
+                    rcv_serial.packet.mag.mag_z);
+                
+                // GPS GNRMC - Recomended Minimum Navigation Info
+                printf("[GNRMC] Time:%s Date:%s Status:%c Lat:%s%c Lon:%s%c Speed:%.2fkts Course:%.2f°\n",
+                    rcv_serial.packet.gnrmc.utc_time,
+                    rcv_serial.packet.gnrmc.date,
+                    rcv_serial.packet.gnrmc.status,
+                    rcv_serial.packet.gnrmc.lat,
+                    rcv_serial.packet.gnrmc.ns,
+                    rcv_serial.packet.gnrmc.lon,
+                    rcv_serial.packet.gnrmc.ew,
+                    rcv_serial.packet.gnrmc.speed_knots,
+                    rcv_serial.packet.gnrmc.course_deg);
+                
+                // GPS GNGGA - Fix quality and altitude data
+                printf("[GNGGA] Time:%s Lat:%.6f%c Lon:%.6f%c Fix:%d Sats:%d HDOP:%.2f Alt:%.2fm\n",
+                    rcv_serial.packet.gngga.utc_time,
+                    rcv_serial.packet.gngga.lat,
+                    rcv_serial.packet.gngga.ns,
+                    rcv_serial.packet.gngga.lon,
+                    rcv_serial.packet.gngga.ew,
+                    rcv_serial.packet.gngga.fix_quality,
+                    rcv_serial.packet.gngga.num_satellites,
+                    rcv_serial.packet.gngga.hdop,
+                    rcv_serial.packet.gngga.altitude);
+                
+                // GPS GNVTG - Velocity and course data
+                printf("[GNVTG] Course(T):%.2f° Course(M):%.2f° Speed:%.2fkts (%.2fkm/h)\n",
+                    rcv_serial.packet.gnvtg.course_true,
+                    rcv_serial.packet.gnvtg.course_magnetic,
+                    rcv_serial.packet.gnvtg.speed_knots,
+                    rcv_serial.packet.gnvtg.speed_kmh);
+                
+                printf("==========================================\n\n");
+				
         #ifdef DEBUG
         // Print debug telemetry periodically
-            if (++loop_count % TELEMETRY_PRINT_INTERVAL == 0) {
                 printf("\n========== TELEMETRY PACKET #%lu ==========\n", 
                     loop_count / TELEMETRY_PRINT_INTERVAL);
                 
@@ -761,7 +840,6 @@ int main(void) {
                     tlm_packet.gnvtg.speed_kmh);
                 
                 printf("==========================================\n\n");
-        }
         #endif
         
         // Optional: Add small delay to prevent CPU saturation
