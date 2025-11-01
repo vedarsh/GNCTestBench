@@ -17,9 +17,13 @@ typedef enum {
 #define 	IMU_CHIP_ID_REG		0x72
 #define 	IMU_CHIP_ID			0xE9
 
+#define		IMU_PWR_MGMT		0x10
+
 #define		IMU_ACCEL_CONFIG	0x1B
 #define		IMU_GYRO_CONFIG		0x1C
 #define 	IMU_FIFO_CONFIG0	0x1D
+
+#define		IMU_SET_G_A_LN		0b00001111
 
 #define		IMU_G_LIMIT_16G		0b00010000
 
