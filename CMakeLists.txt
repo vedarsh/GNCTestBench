@@ -38,9 +38,7 @@ pico_sdk_init()
 add_executable(GNCTestBench 
                 src/main.c
                 drivers/QMC5883L/qmc5883l.c 
-                drivers/DS3231/ds3231.c 
                 drivers/NEOM8N/neom8n.c
-                drivers/MPU6050/mpu6050.c
                 drivers/ICM45686/ICM45686.c)
 
 

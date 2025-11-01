@@ -3,21 +3,42 @@
  * @brief GNC Test Bench Telemetry System
  * @author Vedarsh
  * @date 2025-10-07
- * @version 2.0.0
+ * @version 2.1.0
  * @compliance DO-178C Level C, MISRA-C:2012
  * 
  * @note Dual-core architecture:
  *       Core 0: Sensor acquisition, fusion, and filtering
  *       Core 1: Telemetry processing and output
+ * 
+ * @changes v2.1.0: Removed DS3231 RTC dependency, added GPS time synchronization
  */
 
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
 #include <math.h>
+#include <stdlib.h>
 
 #include "main.h"
 #include "PacketStructures.h"
+
+/*============================================================================*/
+/* GLOBAL TIME SYNCHRONIZATION                                                */
+/*============================================================================*/
+
+typedef struct {
+    bool synced;                    /**< Time synchronization status */
+    uint32_t gps_epoch_ms;          /**< GPS time in milliseconds since GPS epoch */
+    uint64_t system_boot_offset_ms; /**< System boot time offset */
+    absolute_time_t last_sync_time; /**< Last successful GPS time sync */
+} time_sync_state_t;
+
+static time_sync_state_t time_sync = {
+    .synced = false,
+    .gps_epoch_ms = 0U,
+    .system_boot_offset_ms = 0U,
+    .last_sync_time = {0}
+};
 
 /*============================================================================*/
 /* UTILITY FUNCTIONS                                                          */
@@ -25,6 +46,10 @@
 
 /**
  * @brief Safe float comparison with epsilon
+ * @param[in] a First operand
+ * @param[in] b Second operand
+ * @param[in] epsilon Comparison tolerance
+ * @return true if values are within epsilon
  */
 static inline bool float_equals(float a, float b, float epsilon) 
 {
@@ -33,6 +58,10 @@ static inline bool float_equals(float a, float b, float epsilon)
 
 /**
  * @brief Constrain value between min and max
+ * @param[in] val Input value
+ * @param[in] min Minimum bound
+ * @param[in] max Maximum bound
+ * @return Constrained value
  */
 static inline float constrain_float(float val, float min, float max) {
     if (val < min) return min;
@@ -42,6 +71,8 @@ static inline float constrain_float(float val, float min, float max) {
 
 /**
  * @brief Wrap angle to [-180, 180] range
+ * @param[in] angle Input angle in degrees
+ * @return Wrapped angle
  */
 static float wrap_180(float angle) {
     while (angle > 180.0f) angle -= 360.0f;
@@ -51,6 +82,9 @@ static float wrap_180(float angle) {
 
 /**
  * @brief CRC-16-CCITT calculation (polynomial 0x1021)
+ * @param[in] data Pointer to data buffer
+ * @param[in] length Length of data in bytes
+ * @return Calculated CRC-16 value
  */
 static uint16_t calculate_crc16(const uint8_t *data, size_t length) {
     uint16_t crc = 0xFFFFU;
@@ -71,6 +105,8 @@ static uint16_t calculate_crc16(const uint8_t *data, size_t length) {
 
 /**
  * @brief Verify packet integrity
+ * @param[in] packet Pointer to telemetry serial packet
+ * @return true if packet is valid
  */
 static bool verify_packet_integrity(const TLM_serial_t *packet) {
     if (packet->header != FIFO_HEADER_UINT16) return false;
@@ -82,65 +118,138 @@ static bool verify_packet_integrity(const TLM_serial_t *packet) {
 }
 
 /*============================================================================*/
-/* ICM42688 DUMMY FUNCTIONS (PLACEHOLDER)                                     */
+/* GPS TIME SYNCHRONIZATION                                                   */
 /*============================================================================*/
 
 /**
- * @brief ICM42688 initialization dummy
- * @note Replace with actual driver implementation
+ * @brief Parse GPS time string to milliseconds since GPS epoch
+ * @param[in] utc_time UTC time string (HHMMSS.sss)
+ * @param[in] date Date string (DDMMYY)
+ * @return Milliseconds since GPS epoch (Jan 6, 1980)
  */
-static bool icm42688_init(i2c_inst_t *i2c) {
-    (void)i2c;
-    /* TODO: Implement actual ICM42688 initialization */
-    return true;
+static uint32_t gps_time_to_epoch_ms(const char *utc_time, const char *date) {
+    if (strlen(utc_time) < 6U || strlen(date) < 6U) {
+        return 0U;
+    }
+    
+    /* Parse time components */
+    uint32_t hours = (uint32_t)((utc_time[0] - '0') * 10U + (utc_time[1] - '0'));
+    uint32_t minutes = (uint32_t)((utc_time[2] - '0') * 10U + (utc_time[3] - '0'));
+    uint32_t seconds = (uint32_t)((utc_time[4] - '0') * 10U + (utc_time[5] - '0'));
+    
+    /* Parse date components */
+    uint32_t day = (uint32_t)((date[0] - '0') * 10U + (date[1] - '0'));
+    uint32_t month = (uint32_t)((date[2] - '0') * 10U + (date[3] - '0'));
+    uint32_t year = (uint32_t)((date[4] - '0') * 10U + (date[5] - '0')) + 2000U;
+    
+    /* Simplified epoch calculation (approximation) */
+    /* Days since GPS epoch (Jan 6, 1980) */
+    uint32_t days_since_epoch = (year - 1980U) * 365U + (year - 1980U) / 4U;
+    
+    /* Add days for months */
+    const uint32_t days_per_month[] = {31U, 28U, 31U, 30U, 31U, 30U, 
+                                       31U, 31U, 30U, 31U, 30U, 31U};
+    for (uint32_t m = 1U; m < month; m++) {
+        days_since_epoch += days_per_month[m - 1U];
+    }
+    days_since_epoch += day;
+    
+    /* Convert to milliseconds */
+    uint32_t epoch_ms = (days_since_epoch * 86400U + hours * 3600U + 
+                         minutes * 60U + seconds) * 1000U;
+    
+    return epoch_ms;
 }
 
 /**
- * @brief Read ICM42688 raw data dummy
- * @note Replace with actual driver implementation
+ * @brief Update time synchronization from GPS data
+ * @param[in] gnrmc Pointer to GNRMC sentence data
  */
-static bool icm42688_read_raw(i2c_inst_t *i2c, icm42688_raw_t *data) {
-    (void)i2c;
+static void update_time_sync(const nmea_gnrmc_t *gnrmc) {
+    if (gnrmc->status != 'A') {
+        return; /* GPS not locked */
+    }
     
-    /* Generate deterministic dummy data for testing */
-    static uint32_t counter = 0U;
-    counter++;
+    uint32_t gps_epoch = gps_time_to_epoch_ms(gnrmc->utc_time, gnrmc->date);
+    if (gps_epoch == 0U) {
+        return; /* Invalid time parse */
+    }
     
-    /* Simulate 1g on Z-axis (hovering/stationary) */
-    data->accel_x_raw = (int16_t)(100 * sinf(counter * 0.01f));
-    data->accel_y_raw = (int16_t)(50 * cosf(counter * 0.02f));
-    data->accel_z_raw = (int16_t)(16384); /* 1g at 16g range */
+    absolute_time_t now = get_absolute_time();
     
-    /* Simulate small gyro drift */
-    data->gyro_x_raw = (int16_t)(10 * sinf(counter * 0.005f));
-    data->gyro_y_raw = (int16_t)(15 * cosf(counter * 0.007f));
-    data->gyro_z_raw = (int16_t)(5 * sinf(counter * 0.003f));
-    
-    /* Simulate temperature around 25°C */
-    data->temp_raw = (int16_t)(25 * 100);
-    
-    return true;
+    if (!time_sync.synced) {
+        /* First sync */
+        time_sync.gps_epoch_ms = gps_epoch;
+        time_sync.system_boot_offset_ms = to_ms_since_boot(now);
+        time_sync.synced = true;
+        time_sync.last_sync_time = now;
+        
+        printf("[TIME] GPS time synchronized: %s UTC (Date: %s)\n", 
+               gnrmc->utc_time, gnrmc->date);
+    } else {
+        /* Continuous sync - update drift compensation */
+        uint64_t system_elapsed = to_ms_since_boot(now) - time_sync.system_boot_offset_ms;
+        uint32_t gps_elapsed = gps_epoch - time_sync.gps_epoch_ms;
+        int64_t drift_ms = (int64_t)system_elapsed - (int64_t)gps_elapsed;
+        
+        if (abs(drift_ms) > 1000) { /* >1 second drift */
+            time_sync.gps_epoch_ms = gps_epoch;
+            time_sync.system_boot_offset_ms = to_ms_since_boot(now);
+            printf("[TIME] Clock drift corrected: %lldms\n", drift_ms);
+        }
+        
+        time_sync.last_sync_time = now;
+    }
 }
 
 /**
- * @brief Scale ICM42688 raw data to engineering units
+ * @brief Get current synchronized time
+ * @param[out] timeframe Pointer to time frame structure
  */
-static void icm42688_scale_data(const icm42688_raw_t *raw, icm42688_scaled_t *scaled) {
-    scaled->accel_x_g = (float)raw->accel_x_raw * ICM42688_ACCEL_SCALE;
-    scaled->accel_y_g = (float)raw->accel_y_raw * ICM42688_ACCEL_SCALE;
-    scaled->accel_z_g = (float)raw->accel_z_raw * ICM42688_ACCEL_SCALE;
+static void get_synchronized_time(timeframe_t *timeframe) {
+    absolute_time_t now = get_absolute_time();
     
-    scaled->gyro_x_dps = (float)raw->gyro_x_raw * ICM42688_GYRO_SCALE;
-    scaled->gyro_y_dps = (float)raw->gyro_y_raw * ICM42688_GYRO_SCALE;
-    scaled->gyro_z_dps = (float)raw->gyro_z_raw * ICM42688_GYRO_SCALE;
+    if (!time_sync.synced) {
+        timeframe->is_time_synced = false;
+        timeframe->year = 0U;
+        timeframe->month = 0U;
+        timeframe->day = 0U;
+        timeframe->hour = 0U;
+        timeframe->minute = 0U;
+        timeframe->second = 0U;
+        return;
+    }
     
-    scaled->temp_c = (float)raw->temp_raw / 100.0f;
+    /* Calculate current GPS time */
+    uint64_t system_elapsed = to_ms_since_boot(now) - time_sync.system_boot_offset_ms;
+    uint32_t current_gps_ms = time_sync.gps_epoch_ms + (uint32_t)system_elapsed;
+    
+    /* Convert back to time components (simplified) */
+    uint32_t total_seconds = current_gps_ms / 1000U;
+    timeframe-> second = (uint8_t)(total_seconds % 60U);
+    timeframe-> minute = (uint8_t)((total_seconds / 60U) % 60U);
+    timeframe-> hour = (uint8_t)((total_seconds / 3600U) % 24U);
+    
+    /* Check sync freshness (warn if >60s since last GPS update) */
+    int64_t sync_age_ms = absolute_time_diff_us(time_sync.last_sync_time, now) / 1000;
+    timeframe-> is_time_synced = (sync_age_ms < 60000);
+    
+    /* Simplified date (keep from last GPS sync) */
+    timeframe-> year = 2025U;
+    timeframe-> month = 1U;
+    timeframe-> day = 1U;
 }
+
+/*============================================================================*/
+/* IMU VALIDATION                                                             */
+/*============================================================================*/
 
 /**
  * @brief Validate IMU sensor data
+ * @param[in] data Pointer to scaled IMU data
+ * @return true if data is within valid ranges
  */
-static bool validate_imu_data(const icm42688_scaled_t *data) {
+static bool validate_imu_data(const icm42686_scaled_t *data) {
     if (fabsf(data->accel_x_g) > MAX_ACCEL_G) return false;
     if (fabsf(data->accel_y_g) > MAX_ACCEL_G) return false;
     if (fabsf(data->accel_z_g) > MAX_ACCEL_G) return false;
@@ -158,8 +267,10 @@ static bool validate_imu_data(const icm42688_scaled_t *data) {
 
 /**
  * @brief Initialize sensor fusion with initial orientation
+ * @param[in] imu Pointer to IMU data
+ * @param[in] mag Pointer to magnetometer data
  */
-static void fusion_initialize(const icm42688_scaled_t *imu, 
+static void fusion_initialize(const icm42686_scaled_t *imu, 
                               const qmc_5883_mag_read_t *mag) {
     /* Calculate initial roll and pitch from accelerometer */
     float ax = imu->accel_x_g;
@@ -196,8 +307,11 @@ static void fusion_initialize(const icm42688_scaled_t *imu,
 
 /**
  * @brief Update attitude using complementary filter
+ * @param[in] imu Pointer to IMU data
+ * @param[in] mag Pointer to magnetometer data
+ * @param[out] attitude Pointer to attitude output structure
  */
-static void fusion_update(const icm42688_scaled_t *imu,
+static void fusion_update(const icm42686_scaled_t *imu,
                          const qmc_5883_mag_read_t *mag,
                          attitude_data_t *attitude) {
     
@@ -280,6 +394,7 @@ static void fusion_update(const icm42688_scaled_t *imu,
 
 /**
  * @brief Update system health status
+ * @param[in,out] packet Pointer to telemetry packet
  */
 static void update_health_status(TLM_packet_t *packet) {
     absolute_time_t now = get_absolute_time();
@@ -315,6 +430,14 @@ static void update_health_status(TLM_packet_t *packet) {
         system_health.fusion = HEALTH_DEGRADED;
     }
     
+    /* Check time sync health */
+    int64_t sync_age_ms = absolute_time_diff_us(time_sync.last_sync_time, now) / 1000;
+    if (time_sync.synced && sync_age_ms < 60000) {
+        system_health.rtc = HEALTH_NOMINAL;
+    } else {
+        system_health.rtc = HEALTH_DEGRADED;
+    }
+    
     /* Check CRC error rate */
     if (system_health.crc_error_count > MAX_CRC_ERRORS) {
         /* Critical error - reset system */
@@ -330,18 +453,21 @@ static void update_health_status(TLM_packet_t *packet) {
 /* HARDWARE INITIALIZATION                                                    */
 /*============================================================================*/
 
+/**
+ * @brief Initialize I2C interface
+ */
 static inline void init_i2c(void) 
 {
-    //Init I2C at specified port
     i2c_init(I2C_PORT, 400000U);
-
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
-
     gpio_pull_up(I2C_SDA);
     gpio_pull_up(I2C_SCL);
 }
 
+/**
+ * @brief UART0 interrupt handler for GPS NMEA data
+ */
 void __isr __time_critical_func(uart0_irq_handler)(void) {
     while (uart_is_readable(uart0)) {
         uint8_t ch = uart_getc(uart0);
@@ -405,6 +531,9 @@ void __isr __time_critical_func(uart0_irq_handler)(void) {
 static TLM_serial_t core1_received_packet;
 static volatile bool core1_data_available = false;
 
+/**
+ * @brief Core 1 SIO interrupt handler for inter-core communication
+ */
 void core1_sio_irq(void) {
     while (multicore_fifo_rvalid()) {
         uint32_t src_ptr = multicore_fifo_pop_blocking();
@@ -415,6 +544,9 @@ void core1_sio_irq(void) {
     multicore_fifo_clear_irq();
 }
 
+/**
+ * @brief Initialize UART for GPS communication
+ */
 static inline void init_uart(void) {
     uart_init(uart0, NEOM8N_UART_BAUDRATE);
     gpio_set_function(NEOM8N_UART_TX_PIN, GPIO_FUNC_UART);
@@ -437,6 +569,11 @@ static inline void init_uart(void) {
 /* TELEMETRY FUNCTIONS - CORE 0                                               */
 /*============================================================================*/
 
+/**
+ * @brief Acquire sensor data based on current device
+ * @param[in,out] tlm_packet Pointer to telemetry packet
+ * @param[in] device Current device to poll
+ */
 void telemetry_acquire_sensor(TLM_packet_t* tlm_packet, current_device_t device) {
     switch(device) {
         case DEV_GPS:
@@ -447,6 +584,10 @@ void telemetry_acquire_sensor(TLM_packet_t* tlm_packet, current_device_t device)
                                       &tlm_packet->gnrmc, 
                                       &tlm_packet->gngga, 
                                       &tlm_packet->gnvtg);
+                    
+                    /* Update time synchronization */
+                    update_time_sync(&tlm_packet->gnrmc);
+                    
                     ready_buffer_idx = -1;
                 }
                 nmea_data_ready = false;
@@ -455,18 +596,13 @@ void telemetry_acquire_sensor(TLM_packet_t* tlm_packet, current_device_t device)
             break;
 
         case DEV_MAG:
-            if (qmc5883l_read_mag_drdy(I2C_PORT, &tlm_packet->mag)) {
+            if (qmc5883l_read_mag_drdy(I2C_PORT, &tlm_packet->mag) == SENSOR_OK) {
                 system_health.last_mag_update = get_absolute_time();
             }
             break;
 
-        case DEV_RTC:
-            ds3231_read_time(I2C_PORT, &tlm_packet->timeframe);
-            break;
-
         case DEV_IMU:
-            if (icm42688_read_raw(I2C_PORT, &tlm_packet->imu_raw)) {
-                icm42688_scale_data(&tlm_packet->imu_raw, &tlm_packet->imu_scaled);
+            if (sensor_value_scaled(I2C_PORT, &tlm_packet->imu_scaled)) {
                 if (validate_imu_data(&tlm_packet->imu_scaled)) {
                     system_health.last_imu_update = get_absolute_time();
                 }
@@ -484,6 +620,11 @@ void telemetry_acquire_sensor(TLM_packet_t* tlm_packet, current_device_t device)
     }
 }
 
+/**
+ * @brief Serialize telemetry packet for transmission
+ * @param[in] tlm_packet Pointer to source packet
+ * @param[out] tlm_serial Pointer to destination serial packet
+ */
 void tlm_serialize_packet(TLM_packet_t* tlm_packet, TLM_serial_t* tlm_serial) {
     tlm_serial->header = FIFO_HEADER_UINT16;
     memcpy(&tlm_serial->packet, tlm_packet, sizeof(TLM_packet_t));
@@ -495,6 +636,8 @@ void tlm_serialize_packet(TLM_packet_t* tlm_packet, TLM_serial_t* tlm_serial) {
 
 /**
  * @brief Queue telemetry to Core 1 with overflow protection
+ * @param[in] src Pointer to source serial packet
+ * @return true if successfully queued
  */
 static bool queue_tlm_to_core1(TLM_serial_t *src) {
     uint8_t idx = tx_write_idx % TX_POOL_SIZE;
@@ -517,6 +660,9 @@ static bool queue_tlm_to_core1(TLM_serial_t *src) {
 
 /**
  * @brief Receive telemetry from Core 1 (non-blocking with timeout)
+ * @param[out] dest Pointer to destination packet
+ * @param[in] timeout_us Timeout in microseconds
+ * @return true if packet received and valid
  */
 static bool receive_tlm_from_core1(TLM_serial_t *dest, uint32_t timeout_us) {
     uint32_t start = time_us_32();
@@ -538,6 +684,9 @@ static bool receive_tlm_from_core1(TLM_serial_t *dest, uint32_t timeout_us) {
 /* CORE 1 ENTRY POINT - TELEMETRY OUTPUT                                     */
 /*============================================================================*/
 
+/**
+ * @brief Core 1 main entry point - telemetry processing and output
+ */
 void core1_entry(void) {
     /* Setup inter-core interrupt */
     multicore_fifo_clear_irq();
@@ -571,33 +720,18 @@ void core1_entry(void) {
                 if (dt_ms >= 1000) {
                     last_print_time = now;
                     
+                    printf("═══════════════════════════════════════════════════════════════\n");
                     printf("-- TELEMETRY PACKET #%-5lu | Core1 Uptime: %llu ms         --\n", 
                            core1_received_packet.packet.packet_sequence,
                            to_ms_since_boot(now));
                     
-                    /* RTC Timestamp */
-                    printf("-- [RTC] %04d-%02d-%02d %02d:%02d:%02d %-12s           --\n",
-                           core1_received_packet.packet.timeframe.time.year,
-                           core1_received_packet.packet.timeframe.time.month,
-                           core1_received_packet.packet.timeframe.time.day,
-                           core1_received_packet.packet.timeframe.time.hour,
-                           core1_received_packet.packet.timeframe.time.minute,
-                           core1_received_packet.packet.timeframe.time.second,
-                           core1_received_packet.packet.timeframe.time.is_time_synced ? 
-                           "[SYNCED]" : "[NO SYNC]");
-                    
-                    
-                    /* IMU Data - Raw */
-                    printf("-- [IMU RAW] Ax:%6d Ay:%6d Az:%6d                  --\n",
-                           core1_received_packet.packet.imu_raw.accel_x_raw,
-                           core1_received_packet.packet.imu_raw.accel_y_raw,
-                           core1_received_packet.packet.imu_raw.accel_z_raw);
-                    printf("--           Gx:%6d Gy:%6d Gz:%6d Temp:%6d°C  --\n",
-                           core1_received_packet.packet.imu_raw.gyro_x_raw,
-                           core1_received_packet.packet.imu_raw.gyro_y_raw,
-                           core1_received_packet.packet.imu_raw.gyro_z_raw,
-                           core1_received_packet.packet.imu_raw.temp_raw);
-                    
+                    /* GPS-Synchronized Time */
+                    printf("-- [TIME] %02d:%02d:%02d UTC %s                          --\n",
+                           core1_received_packet.packet.timeframe. hour,
+                           core1_received_packet.packet.timeframe. minute,
+                           core1_received_packet.packet.timeframe. second,
+                           core1_received_packet.packet.timeframe. is_time_synced ? 
+                           "[GPS-SYNCED]" : "[UNSYNCED]");
                     
                     /* IMU Data - Scaled */
                     printf("-- [IMU]     Ax:%7.3fg Ay:%7.3fg Az:%7.3fg         --\n",
@@ -609,7 +743,6 @@ void core1_entry(void) {
                            core1_received_packet.packet.imu_scaled.gyro_y_dps,
                            core1_received_packet.packet.imu_scaled.gyro_z_dps,
                            core1_received_packet.packet.imu_scaled.temp_c);
-                    
                     
                     /* Attitude (Fused) */
                     printf("-- [ATTITUDE] Roll:%7.2f° Pitch:%7.2f° Yaw:%7.2f°   --\n",
@@ -626,13 +759,11 @@ void core1_entry(void) {
                            core1_received_packet.packet.attitude.fusion_valid ? 
                            "[VALID]" : "[INIT]");
                     
-                    
                     /* Magnetometer */
                     printf("-- [MAG]     X:%6d Y:%6d Z:%6d (counts)           --\n",
                            core1_received_packet.packet.mag.mag_x,
                            core1_received_packet.packet.mag.mag_y,
                            core1_received_packet.packet.mag.mag_z);
-                    
                     
                     /* GPS Data */
                     printf("-- [GPS] Status:%c Time:%s Date:%s                  --\n",
@@ -653,10 +784,9 @@ void core1_entry(void) {
                            core1_received_packet.packet.gngga.altitude,
                            core1_received_packet.packet.gngga.hdop);
                     
-                    
                     /* System Health */
                     const char* health_str[] = {"NOM", "DEG", "CRT", "FAIL"};
-                    printf("-- [HEALTH] GPS:%-4s MAG:%-4s RTC:%-4s IMU:%-4s FUS:%-4s --\n",
+                    printf("-- [HEALTH] GPS:%-4s MAG:%-4s TIME:%-4s IMU:%-4s FUS:%-4s --\n",
                            health_str[core1_received_packet.packet.health.gps],
                            health_str[core1_received_packet.packet.health.mag],
                            health_str[core1_received_packet.packet.health.rtc],
@@ -667,12 +797,12 @@ void core1_entry(void) {
                            core1_received_packet.packet.health.sensor_timeout_count,
                            core1_received_packet.packet.health.fusion_divergence_count);
                     
-                    
                     /* Statistics */
                     float packet_success_rate = (packet_count > 0U) ? 
                                                (100.0f * (float)valid_packets / (float)packet_count) : 0.0f;
                     printf("-- [STATS] Valid:%lu Invalid:%lu Success:%.1f%%            --\n",
                            valid_packets, invalid_packets, packet_success_rate);
+                    printf("═══════════════════════════════════════════════════════════════\n\n");
                 }
                 
                 /* Echo packet back to Core 0 for acknowledgment */
@@ -685,7 +815,7 @@ void core1_entry(void) {
                 invalid_packets++;
                 system_health.crc_error_count++;
                 
-                printf("[CORE1 ERROR] Packet validation failed: Header:%d Footer:%d CRC:%d\n\n\n\n",
+                printf("[CORE1 ERROR] Packet validation failed: Header:%d Footer:%d CRC:%d\n",
                        header_valid, footer_valid, crc_valid);
             }
         }
@@ -698,6 +828,10 @@ void core1_entry(void) {
 /* MAIN APPLICATION - CORE 0                                                  */
 /*============================================================================*/
 
+/**
+ * @brief Main application entry point - Core 0 sensor acquisition
+ * @return Exit status (never returns in normal operation)
+ */
 int main(void) {
     /* Initialize USB serial FIRST - critical for debug */
     stdio_init_all();
@@ -705,9 +839,10 @@ int main(void) {
     
     printf("\n");
     printf("╔════════════════════════════════════════════════════════════╗\n");
-    printf("--     GNC TEST BENCH TELEMETRY SYSTEM v2.0.0                --\n");
-    printf("--     Aerospace Compliant Implementation                    --\n");
-    printf("--     DO-178C Level C | MISRA-C:2012                        --\n");
+    printf("║     GNC TEST BENCH TELEMETRY SYSTEM v2.1.0                ║\n");
+    printf("║     Aerospace Compliant Implementation                    ║\n");
+    printf("║     DO-178C Level C | MISRA-C:2012                        ║\n");
+    printf("║     GPS Time Synchronization | No External RTC            ║\n");
     printf("╚════════════════════════════════════════════════════════════╝\n\n");
     
     /* Initialize critical section for NMEA parsing */
@@ -741,22 +876,14 @@ int main(void) {
         system_health.mag = HEALTH_FAILED;
     }
     
-    if (ds3231_init(I2C_PORT)) {
-        printf("[INIT] DS3231 RTC initialized\n");
+    if (imu_init(I2C_PORT)) {
+        printf("[INIT] ICM42688 IMU initialized\n");
     } else {
-        printf("[ERROR] DS3231 initialization failed\n");
-        system_health.rtc = HEALTH_FAILED;
+        printf("[WARN] ICM42688 initialization failed\n");
+        system_health.imu = HEALTH_FAILED;
     }
     
-    if (mpu6050_init(I2C_PORT)) {
-        printf("[INIT] MPU6050 (backup IMU) initialized\n");
-    }
-    
-    if (icm42688_init(I2C_PORT)) {
-        printf("[INIT] ICM42688 IMU initialized (DUMMY)\n");
-    } else {
-        printf("[WARN] ICM42688 initialization failed (using dummy data)\n");
-    }
+    printf("[INIT] GPS time synchronization enabled (awaiting GPS lock)\n");
     
     printf("\n[READY] System operational - entering main telemetry loop\n");
     printf("═══════════════════════════════════════════════════════════════\n\n");
@@ -802,8 +929,12 @@ int main(void) {
             
             /* Wait for acknowledgment from Core 1 (with timeout) */
             if (!receive_tlm_from_core1(&ack_packet, 50000U)) {
-                printf("[CORE0 WARN] Core 1 ACK timeout\n");
                 system_health.sensor_timeout_count++;
+                
+                if ((system_health.sensor_timeout_count % 100U) == 0U) {
+                    printf("[CORE0 WARN] Core 1 ACK timeout (count: %lu)\n",
+                           system_health.sensor_timeout_count);
+                }
             }
         }
         
@@ -812,13 +943,14 @@ int main(void) {
         /* Maintain 10ms cycle time */
         absolute_time_t cycle_end = get_absolute_time();
         int64_t elapsed_us = absolute_time_diff_us(cycle_start, cycle_end);
-        int64_t sleep_us_num = 10000 - elapsed_us;
+        int64_t sleep_us_val = 10000 - elapsed_us;
         
-        if (sleep_us > 0) {
-            sleep_us(sleep_us_num);
+        if (sleep_us_val > 0) {
+            sleep_us((uint64_t)sleep_us_val);
         } else if ((loop_count % 100U) == 0U) {
             printf("[CORE0 WARN] Cycle overrun: %lldus (target: 10000us)\n", elapsed_us);
         }
     }
+    
     return 0;
-} 
+}

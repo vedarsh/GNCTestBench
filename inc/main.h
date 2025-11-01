@@ -10,9 +10,8 @@
 #include "hardware/divider.h"
 
 #include "QMC5883L/qmc5883l.h"
-#include "DS3231/ds3231.h"
-#include "MPU6050/mpu6050.h"
 #include "NEOM8N/neom8n.h"
+#include "ICM45686/ICM45686.h"
 
 /*============================================================================*/
 /* PIN CONFIG PARAMETERS                                                      */

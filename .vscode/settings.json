@@ -41,6 +41,9 @@
         "stdlib.h": "c",
         "uart.h": "c",
         "stdio.h": "c",
-        "multicore.h": "c"
+        "multicore.h": "c",
+        "critical_section.h": "c",
+        "main.h": "c",
+        "packetstructures.h": "c"
     }
 }

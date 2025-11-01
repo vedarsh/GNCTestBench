@@ -104,7 +104,7 @@ imu_state_t imu_init(i2c_inst_t *i2c)
 }
 
 // function to sample the data
-imu_state_t read_sensor_value(i2c_inst_t *i2c, icm42688_raw_t *imu_raw)
+imu_state_t read_sensor_value(i2c_inst_t *i2c, icm42686_raw_t *imu_raw)
 {
     uint8_t buf[14];
 
@@ -135,9 +135,9 @@ imu_state_t read_sensor_value(i2c_inst_t *i2c, icm42688_raw_t *imu_raw)
 }
 
 
-imu_state_t sensor_value_scaled(i2c_inst_t *i2c, icm42688_scaled_t *imu_scaled)
+imu_state_t sensor_value_scaled(i2c_inst_t *i2c, icm42686_scaled_t *imu_scaled)
 {
-    icm42688_raw_t imu_read;
+    icm42686_raw_t imu_read;
 
     // Read raw sensor values first
     if(!i2c_read_register(i2c, IMU_ADDR, IMU_Ax_LSB, (uint8_t *) &imu_read, sizeof(imu_read))) 

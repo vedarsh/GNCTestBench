@@ -1,6 +1,8 @@
 #ifndef __PACKETSTRUCTURES_H__
 #define __PACKETSTRUCTURES_H__
 
+#include "main.h"
+
 /*============================================================================*/
 /* CONFIGURATION PARAMETERS                                                   */
 /*============================================================================*/
@@ -97,6 +99,17 @@ typedef struct {
     absolute_time_t last_imu_update;
 } system_health_t;
 
+typedef struct {
+    bool is_time_synced;
+
+    uint32_t year;
+    uint32_t month;
+    uint32_t day;
+    uint32_t hour;
+    uint32_t minute;
+    uint32_t second;
+}timeframe_t;
+
 /*============================================================================*/
 /* DATA STRUCTURES - PACKED FOR DETERMINISTIC SIZING                          */
 /*============================================================================*/
@@ -179,30 +192,6 @@ typedef struct {
 
 #pragma pack(push,1)
 typedef struct {
-    int16_t accel_x_raw;
-    int16_t accel_y_raw;
-    int16_t accel_z_raw;
-    int16_t gyro_x_raw;
-    int16_t gyro_y_raw;
-    int16_t gyro_z_raw;
-    int16_t temp_raw;
-} icm42688_raw_t;
-#pragma pack(pop)
-
-#pragma pack(push,1)
-typedef struct {
-    float accel_x_g;
-    float accel_y_g;
-    float accel_z_g;
-    float gyro_x_dps;
-    float gyro_y_dps;
-    float gyro_z_dps;
-    float temp_c;
-} icm42688_scaled_t;
-#pragma pack(pop)
-
-#pragma pack(push,1)
-typedef struct {
     float roll_deg;
     float pitch_deg;
     float yaw_deg;
@@ -260,12 +249,11 @@ typedef struct {
 #pragma pack(push,1)
 typedef struct {
     qmc_5883_mag_read_t mag;
-    timeframe_rtc_t timeframe;
+    timeframe_t timeframe;
     nmea_gnrmc_t gnrmc;
     nmea_gngga_t gngga;
     nmea_gnvtg_t gnvtg;
-    icm42688_raw_t imu_raw;
-    icm42688_scaled_t imu_scaled;
+    icm42686_scaled_t imu_scaled;
     attitude_data_t attitude;
     system_health_t health;
     uint32_t packet_sequence;

@@ -15,6 +15,7 @@ typedef enum {
     IMU_NOT_DETECTED = -2,
 } imu_state_t;
 
+#pragma pack(push,1)
 typedef struct{
     uint8_t Ax_MSB;
     uint8_t Ax_LSB;
@@ -36,8 +37,10 @@ typedef struct{
     
     uint8_t T_MSB;
     uint8_t T_LSB;
-} icm42688_raw_t;
+} icm42686_raw_t;
+#pragma pack(pop)
 
+#pragma pack(push,1)
 typedef struct {
     float accel_x_g;
     float accel_y_g;
@@ -46,7 +49,8 @@ typedef struct {
     float gyro_y_dps;
     float gyro_z_dps;
     float temp_c;
-} icm42688_scaled_t;
+} icm42686_scaled_t;
+#pragma pack(pop)
 
 #define		IMU_ADDR			0x68
 
@@ -74,6 +78,6 @@ typedef struct {
 #define     IMU_Ax_LSB          0x00
 
 imu_state_t imu_init(i2c_inst_t *i2c);
-imu_state_t sensor_value_scaled(i2c_inst_t *i2c, icm42688_scaled_t *imu_scaled);
+imu_state_t sensor_value_scaled(i2c_inst_t *i2c, icm42686_scaled_t *imu_scaled);
 
 #endif

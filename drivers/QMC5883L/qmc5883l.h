@@ -1,16 +1,17 @@
+#ifndef __QMC_H__
+#define __QMC_H__
+
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include <stdbool.h>
 
-typedef union {
-    struct {
+typedef struct 
+    {
         int16_t mag_x;
         int16_t mag_y;
         int16_t mag_z;
-    };
-    int16_t raw[3];  // same 6 bytes accessible as array
-} qmc_5883_mag_read_t;
+    } qmc_5883_mag_read_t;
 
 typedef enum mag_sensor_state {
     SENSOR_OK = 0,
@@ -69,3 +70,5 @@ bool qmc5883l_verify_id(i2c_inst_t *i2c);
 mag_sensor_state_t qmc_5883l_init(i2c_inst_t *i2c);
 mag_sensor_state_t qmc5883l_read_mag_drdy(i2c_inst_t *i2c, qmc_5883_mag_read_t *mag);
 mag_sensor_state_t qmc5883l_read_temp(i2c_inst_t *i2c, int16_t *temp);
+
+#endif
