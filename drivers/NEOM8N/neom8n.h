@@ -48,3 +48,6 @@ nmea_type_t nmea_parse_sentence(char* sentence,
                                 nmea_gnrmc_t* rmc,
                                 nmea_gngga_t* gga,
                                 nmea_gnvtg_t* vtg);
+
+
+static uint32_t gps_time_to_epoch_ms(const char *utc_time, const char *date);

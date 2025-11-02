@@ -11,34 +11,21 @@
  *       Core 1: Telemetry processing and output
  * 
  * @changes v2.1.0: Removed DS3231 RTC dependency, added GPS time synchronization
+ * 
+ * @build_requirements CMakeLists.txt must include:
+ *   pico_enable_stdio_usb(${PROJECT_NAME} 1)
+ *   pico_enable_stdio_uart(${PROJECT_NAME} 0)
+ *   target_link_libraries(${PROJECT_NAME} 
+ *       pico_stdlib
+ *       pico_multicore
+ *       hardware_i2c
+ *       hardware_uart
+ *       hardware_watchdog
+ *   )
  */
 
-#include <stdio.h>
-#include <string.h>
-#include <stdbool.h>
-#include <math.h>
-#include <stdlib.h>
-
 #include "main.h"
-#include "PacketStructures.h"
 
-/*============================================================================*/
-/* GLOBAL TIME SYNCHRONIZATION                                                */
-/*============================================================================*/
-
-typedef struct {
-    bool synced;                    /**< Time synchronization status */
-    uint32_t gps_epoch_ms;          /**< GPS time in milliseconds since GPS epoch */
-    uint64_t system_boot_offset_ms; /**< System boot time offset */
-    absolute_time_t last_sync_time; /**< Last successful GPS time sync */
-} time_sync_state_t;
-
-static time_sync_state_t time_sync = {
-    .synced = false,
-    .gps_epoch_ms = 0U,
-    .system_boot_offset_ms = 0U,
-    .last_sync_time = {0}
-};
 
 /*============================================================================*/
 /* UTILITY FUNCTIONS                                                          */
@@ -117,49 +104,12 @@ static bool verify_packet_integrity(const TLM_serial_t *packet) {
     return (calc_crc == packet->crc16);
 }
 
-/*============================================================================*/
-/* GPS TIME SYNCHRONIZATION                                                   */
-/*============================================================================*/
-
-/**
- * @brief Parse GPS time string to milliseconds since GPS epoch
- * @param[in] utc_time UTC time string (HHMMSS.sss)
- * @param[in] date Date string (DDMMYY)
- * @return Milliseconds since GPS epoch (Jan 6, 1980)
- */
-static uint32_t gps_time_to_epoch_ms(const char *utc_time, const char *date) {
-    if (strlen(utc_time) < 6U || strlen(date) < 6U) {
-        return 0U;
-    }
-    
-    /* Parse time components */
-    uint32_t hours = (uint32_t)((utc_time[0] - '0') * 10U + (utc_time[1] - '0'));
-    uint32_t minutes = (uint32_t)((utc_time[2] - '0') * 10U + (utc_time[3] - '0'));
-    uint32_t seconds = (uint32_t)((utc_time[4] - '0') * 10U + (utc_time[5] - '0'));
-    
-    /* Parse date components */
-    uint32_t day = (uint32_t)((date[0] - '0') * 10U + (date[1] - '0'));
-    uint32_t month = (uint32_t)((date[2] - '0') * 10U + (date[3] - '0'));
-    uint32_t year = (uint32_t)((date[4] - '0') * 10U + (date[5] - '0')) + 2000U;
-    
-    /* Simplified epoch calculation (approximation) */
-    /* Days since GPS epoch (Jan 6, 1980) */
-    uint32_t days_since_epoch = (year - 1980U) * 365U + (year - 1980U) / 4U;
-    
-    /* Add days for months */
-    const uint32_t days_per_month[] = {31U, 28U, 31U, 30U, 31U, 30U, 
-                                       31U, 31U, 30U, 31U, 30U, 31U};
-    for (uint32_t m = 1U; m < month; m++) {
-        days_since_epoch += days_per_month[m - 1U];
-    }
-    days_since_epoch += day;
-    
-    /* Convert to milliseconds */
-    uint32_t epoch_ms = (days_since_epoch * 86400U + hours * 3600U + 
-                         minutes * 60U + seconds) * 1000U;
-    
-    return epoch_ms;
-}
+static time_sync_state_t time_sync = {
+    .synced = false,
+    .gps_epoch_ms = 0U,
+    .system_boot_offset_ms = 0U,
+    .last_sync_time = {0}
+};
 
 /**
  * @brief Update time synchronization from GPS data
@@ -210,13 +160,13 @@ static void get_synchronized_time(timeframe_t *timeframe) {
     absolute_time_t now = get_absolute_time();
     
     if (!time_sync.synced) {
-        timeframe->is_time_synced = false;
-        timeframe->year = 0U;
-        timeframe->month = 0U;
-        timeframe->day = 0U;
-        timeframe->hour = 0U;
-        timeframe->minute = 0U;
-        timeframe->second = 0U;
+        timeframe-> is_time_synced = false;
+        timeframe-> year = 0U;
+        timeframe-> month = 0U;
+        timeframe-> day = 0U;
+        timeframe-> hour = 0U;
+        timeframe-> minute = 0U;
+        timeframe-> second = 0U;
         return;
     }
     
@@ -239,10 +189,6 @@ static void get_synchronized_time(timeframe_t *timeframe) {
     timeframe-> month = 1U;
     timeframe-> day = 1U;
 }
-
-/*============================================================================*/
-/* IMU VALIDATION                                                             */
-/*============================================================================*/
 
 /**
  * @brief Validate IMU sensor data
@@ -433,7 +379,7 @@ static void update_health_status(TLM_packet_t *packet) {
     /* Check time sync health */
     int64_t sync_age_ms = absolute_time_diff_us(time_sync.last_sync_time, now) / 1000;
     if (time_sync.synced && sync_age_ms < 60000) {
-        system_health.rtc = HEALTH_NOMINAL;
+        system_health.rtc = HEALTH_NOMINAL;  /* Reuse RTC field for time sync */
     } else {
         system_health.rtc = HEALTH_DEGRADED;
     }
@@ -548,6 +494,7 @@ void core1_sio_irq(void) {
  * @brief Initialize UART for GPS communication
  */
 static inline void init_uart(void) {
+    /* Initialize hardware UART0 for GPS */
     uart_init(uart0, NEOM8N_UART_BAUDRATE);
     gpio_set_function(NEOM8N_UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(NEOM8N_UART_RX_PIN, GPIO_FUNC_UART);
@@ -555,14 +502,19 @@ static inline void init_uart(void) {
     uart_set_format(uart0, 8U, 1U, UART_PARITY_NONE);
     uart_set_fifo_enabled(uart0, true);
 
+    /* Set UART RX FIFO interrupt threshold */
     hw_write_masked(&uart_get_hw(uart0)->ifls,
                     2U << UART_UARTIFLS_RXIFLSEL_LSB,
                     UART_UARTIFLS_RXIFLSEL_BITS);
 
+    /* Configure UART interrupt handler */
     irq_set_exclusive_handler(UART0_IRQ, uart0_irq_handler);
     irq_set_priority(UART0_IRQ, PICO_HIGHEST_IRQ_PRIORITY);
     irq_set_enabled(UART0_IRQ, true);
     uart_set_irq_enables(uart0, true, false);
+    
+    printf("[INIT] Hardware UART0 initialized for GPS on pins GP%d(TX)/GP%d(RX)\n", 
+           NEOM8N_UART_TX_PIN, NEOM8N_UART_RX_PIN);
 }
 
 /*============================================================================*/
@@ -600,6 +552,7 @@ void telemetry_acquire_sensor(TLM_packet_t* tlm_packet, current_device_t device)
                 system_health.last_mag_update = get_absolute_time();
             }
             break;
+
 
         case DEV_IMU:
             if (sensor_value_scaled(I2C_PORT, &tlm_packet->imu_scaled)) {
@@ -786,7 +739,7 @@ void core1_entry(void) {
                     
                     /* System Health */
                     const char* health_str[] = {"NOM", "DEG", "CRT", "FAIL"};
-                    printf("-- [HEALTH] GPS:%-4s MAG:%-4s TIME:%-4s IMU:%-4s FUS:%-4s --\n",
+                    printf("-- [HEALTH] GPS:%-4s MAG:%-4s TSYNC:%-4s IMU:%-4s FUS:%-4s --\n",
                            health_str[core1_received_packet.packet.health.gps],
                            health_str[core1_received_packet.packet.health.mag],
                            health_str[core1_received_packet.packet.health.rtc],
@@ -833,11 +786,16 @@ void core1_entry(void) {
  * @return Exit status (never returns in normal operation)
  */
 int main(void) {
-    /* Initialize USB serial FIRST - critical for debug */
+    /* Initialize ALL stdio BEFORE any printf calls */
     stdio_init_all();
-    sleep_ms(2000U);
     
-    printf("\n");
+    /* CRITICAL: Wait for USB CDC connection to stabilize */
+    sleep_ms(3000U);
+
+    stdio_usb_init();
+    
+    /* Send initial test message to verify USB connection */
+    printf("\n\n\n");
     printf("╔════════════════════════════════════════════════════════════╗\n");
     printf("║     GNC TEST BENCH TELEMETRY SYSTEM v2.1.0                ║\n");
     printf("║     Aerospace Compliant Implementation                    ║\n");
@@ -845,28 +803,40 @@ int main(void) {
     printf("║     GPS Time Synchronization | No External RTC            ║\n");
     printf("╚════════════════════════════════════════════════════════════╝\n\n");
     
+    /* Force flush to ensure output is visible */
+    fflush(stdout);
+    
+    printf("[BOOT] Pico SDK initialized\n");
+    printf("[BOOT] USB CDC serial active\n");
+    fflush(stdout);
+    
     /* Initialize critical section for NMEA parsing */
     critical_section_init(&nmea_crit_sec);
     printf("[INIT] Critical sections initialized\n");
+    fflush(stdout);
     
     /* Launch Core 1 BEFORE enabling watchdog */
     multicore_launch_core1(core1_entry);
     printf("[INIT] Core 1 launched - Telemetry processor active\n");
+    fflush(stdout);
     sleep_ms(100U);
     
     /* Enable watchdog with 8 second timeout */
     if (watchdog_caused_reboot()) {
         printf("[WARN] System recovered from watchdog reset\n");
+        fflush(stdout);
     }
     watchdog_enable(WATCHDOG_TIMEOUT_MS, true);
     printf("[INIT] Watchdog enabled (%dms timeout)\n", WATCHDOG_TIMEOUT_MS);
+    fflush(stdout);
     
     /* Initialize hardware peripherals */
     init_i2c();
     printf("[INIT] I2C initialized (400kHz)\n");
+    fflush(stdout);
     
     init_uart();
-    printf("[INIT] UART initialized (GPS @ %dbps)\n", NEOM8N_UART_BAUDRATE);
+    fflush(stdout);
     
     /* Initialize sensors */
     if (qmc_5883l_init(I2C_PORT)) {
@@ -875,6 +845,7 @@ int main(void) {
         printf("[ERROR] QMC5883L initialization failed\n");
         system_health.mag = HEALTH_FAILED;
     }
+    fflush(stdout);
     
     if (imu_init(I2C_PORT)) {
         printf("[INIT] ICM42688 IMU initialized\n");
@@ -882,11 +853,14 @@ int main(void) {
         printf("[WARN] ICM42688 initialization failed\n");
         system_health.imu = HEALTH_FAILED;
     }
+    fflush(stdout);
     
     printf("[INIT] GPS time synchronization enabled (awaiting GPS lock)\n");
+    fflush(stdout);
     
     printf("\n[READY] System operational - entering main telemetry loop\n");
     printf("═══════════════════════════════════════════════════════════════\n\n");
+    fflush(stdout);
     
     /* Initialize telemetry structures */
     TLM_packet_t tlm_packet = {0};

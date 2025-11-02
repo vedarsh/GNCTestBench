@@ -96,3 +96,48 @@ nmea_type_t nmea_parse_sentence(char* sentence,
 
     return type;
 }
+
+/*============================================================================*/
+/* GPS TIME SYNCHRONIZATION                                                   */
+/*============================================================================*/
+
+/**
+ * @brief Parse GPS time string to milliseconds since GPS epoch
+ * @param[in] utc_time UTC time string (HHMMSS.sss)
+ * @param[in] date Date string (DDMMYY)
+ * @return Milliseconds since GPS epoch (Jan 6, 1980)
+ */
+static uint32_t gps_time_to_epoch_ms(const char *utc_time, const char *date) {
+    if (strlen(utc_time) < 6U || strlen(date) < 6U) {
+        return 0U;
+    }
+    
+    /* Parse time components */
+    uint32_t hours = (uint32_t)((utc_time[0] - '0') * 10U + (utc_time[1] - '0'));
+    uint32_t minutes = (uint32_t)((utc_time[2] - '0') * 10U + (utc_time[3] - '0'));
+    uint32_t seconds = (uint32_t)((utc_time[4] - '0') * 10U + (utc_time[5] - '0'));
+    
+    /* Parse date components */
+    uint32_t day = (uint32_t)((date[0] - '0') * 10U + (date[1] - '0'));
+    uint32_t month = (uint32_t)((date[2] - '0') * 10U + (date[3] - '0'));
+    uint32_t year = (uint32_t)((date[4] - '0') * 10U + (date[5] - '0')) + 2000U;
+    
+    /* Simplified epoch calculation (approximation) */
+    /* Days since GPS epoch (Jan 6, 1980) */
+    uint32_t days_since_epoch = (year - 1980U) * 365U + (year - 1980U) / 4U;
+    
+    /* Add days for months */
+    const uint32_t days_per_month[] = {31U, 28U, 31U, 30U, 31U, 30U, 
+                                       31U, 31U, 30U, 31U, 30U, 31U};
+    for (uint32_t m = 1U; m < month; m++) {
+        days_since_epoch += days_per_month[m - 1U];
+    }
+    days_since_epoch += day;
+    
+    /* Convert to milliseconds */
+    uint32_t epoch_ms = (days_since_epoch * 86400U + hours * 3600U + 
+                         minutes * 60U + seconds) * 1000U;
+    
+    return epoch_ms;
+}
+

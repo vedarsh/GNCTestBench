@@ -70,6 +70,8 @@ target_link_libraries(GNCTestBench
         hardware_i2c
         hardware_uart
         hardware_dma
+        pico_stdlib
+        hardware_watchdog
         pico_multicore
         )
 
