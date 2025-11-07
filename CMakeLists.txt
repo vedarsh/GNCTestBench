@@ -36,12 +36,12 @@ pico_sdk_init()
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(GNCTestBench 
-                main.c
+                src/core0/main.c
+                src/core1/core1_main.c
                 drivers/QMC5883L/qmc5883l.c 
-                drivers/DS3231/ds3231.c 
-                drivers/NEOM8N/neom8n.c
-                drivers/MPU6050/mpu6050.c)
+                drivers/NEOM8N/neom8n.c)
 
+add_compile_options(-mcpu=cortex-m0plus -mthumb -mfpu=none -mfloat-abi=soft)
 
 pico_set_program_name(GNCTestBench "GNCTestBench")
 pico_set_program_version(GNCTestBench "0.1")
@@ -62,6 +62,8 @@ target_include_directories(GNCTestBench PRIVATE
 target_include_directories(GNCTestBench
     PUBLIC
         ${PROJECT_SOURCE_DIR}/drivers
+        ${PROJECT_SOURCE_DIR}/src/core0
+        ${PROJECT_SOURCE_DIR}/src/core1
 )
 
 # Add any user requested libraries

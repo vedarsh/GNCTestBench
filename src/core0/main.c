@@ -18,61 +18,18 @@
 #include "pico/multicore.h"
 
 #include "QMC5883L/qmc5883l.h"
-#include "DS3231/ds3231.h"
-#include "MPU6050/mpu6050.h"
 #include "NEOM8N/neom8n.h"
 
-/*============================================================================*/
-/* CONFIGURATION PARAMETERS                                                   */
-/*============================================================================*/
+#include "core1_main.h"
 
-#define I2C_PORT i2c0
-#define I2C_SDA 1
-#define I2C_SCL 0
-#define NEOM8N_UART_TX_PIN 12
-#define NEOM8N_UART_RX_PIN 13
-#define NEOM8N_UART_BAUDRATE 9600
-#define NMEA_BUFFER_SIZE 128
-#define NMEA_NUM_PREFIXES 3
-#define MAX_PREFIX_LEN 6
-#define GPS_SYNC_TIMEOUT_MS 120000
-#define TELEMETRY_PRINT_INTERVAL 1000
-#define WATCHDOG_TIMEOUT_MS 8000
-#define FIFO_HEADER_UINT16 0xABAB
-#define TX_POOL_SIZE 8
+#include "main.h"
+#include "config.h"
+
 
 // Uncomment for debug output
 // #define DEBUG
 
-/*============================================================================*/
-/* DATA STRUCTURES                                                            */
-/*============================================================================*/
 
-#pragma pack(push,1)
-typedef struct TLM_packet {
-    qmc_5883_mag_read_t mag;
-    timeframe_rtc_t timeframe;
-    nmea_gnrmc_t gnrmc;
-    nmea_gngga_t gngga;
-    nmea_gnvtg_t gnvtg;
-} TLM_packet_t;
-#pragma pack(pop)
-
-#pragma pack(push,1)
-typedef struct TLM_serial {
-    uint16_t header;
-    TLM_packet_t packet;
-    uint16_t CRC16;
-} TLM_serial_t;
-#pragma pack(pop)
-
-typedef enum {
-    DEV_GPS = 0,
-    DEV_MAG,
-    DEV_RTC,
-    DEV_IMU,
-    DEV_COUNT
-} current_device_t;
 
 /*============================================================================*/
 /* NMEA PARSING STATE                                                         */
@@ -107,7 +64,7 @@ void queue_tlm_to_core1(TLM_serial_t *src) {
     multicore_fifo_push_blocking((uint32_t)&tx_pool[i]);
 }
 
-void receive_tlm_from_core(TLM_serial_t *dest) {
+void receive_tlm_from_core1(TLM_serial_t *dest) {
     TLM_serial_t *src = (TLM_serial_t *)multicore_fifo_pop_blocking();
     memcpy(dest, src, sizeof(TLM_serial_t));
 }
@@ -203,7 +160,8 @@ static inline void init_uart(void) {
 /* TELEMETRY FUNCTIONS                                                        */
 /*============================================================================*/
 
-void telemetry_non_blocking_packet(TLM_packet_t* tlm_packet, current_device_t current_device) {
+void telemetry_non_blocking_packet(TLM_packet_t* tlm_packet, current_device_t current_device) 
+{
     switch(current_device) {
         case DEV_GPS:
             if (nmea_data_ready) {
@@ -222,10 +180,6 @@ void telemetry_non_blocking_packet(TLM_packet_t* tlm_packet, current_device_t cu
 
         case DEV_MAG:
             qmc5883l_read_mag_drdy(I2C_PORT, &tlm_packet->mag);
-            break;
-
-        case DEV_RTC:
-            ds3231_read_time(I2C_PORT, &tlm_packet->timeframe);
             break;
 
         case DEV_IMU:
@@ -258,87 +212,6 @@ void tlm_serialiser(TLM_packet_t* tlm_packet, TLM_serial_t* tlm_serial) {
 }
 
 /*============================================================================*/
-/* CORE 1 ENTRY POINT                                                         */
-/*============================================================================*/
-
-void core1_entry(void) {
-    TLM_serial_t received_packet;
-    uint32_t packet_count = 0;
-    
-    while (true) {
-        // Receive packet from Core 0
-        receive_tlm_from_core(&received_packet);
-        packet_count++;
-        
-        // Verify CRC
-        uint16_t calculated_crc = 0xFFFF;
-        uint8_t* data = (uint8_t*)&received_packet.packet;
-        for (size_t i = 0; i < sizeof(TLM_packet_t); i++) {
-            calculated_crc ^= ((uint16_t)data[i] << 8);
-            for (uint8_t j = 0; j < 8; j++) {
-                if (calculated_crc & 0x8000) 
-                    calculated_crc = (calculated_crc << 1) ^ 0x1021;
-                else 
-                    calculated_crc <<= 1;
-            }
-        }
-        
-        bool crc_valid = (calculated_crc == received_packet.CRC16);
-        bool header_valid = (received_packet.header == FIFO_HEADER_UINT16);
-        
-        // Print telemetry on Core 1
-			printf("\n========== RCV PACKET ==========\n");
-			// RTC timestamp
-			printf("[RTC] %04d-%02d-%02d %02d:%02d:%02d %s\n",
-			received_packet.packet.timeframe.time.year,
-			received_packet.packet.timeframe.time.month,
-			received_packet.packet.timeframe.time.day,
-			received_packet.packet.timeframe.time.hour,
-			received_packet.packet.timeframe.time.minute,
-			received_packet.packet.timeframe.time.second,
-			received_packet.packet.timeframe.time.is_time_synced ? "[SYNCED]" : "[NOT SYNCED]");
-			// Magnetometer readings in raw counts
-			printf("[MAG] X:%d Y:%d Z:%d\n",
-			received_packet.packet.mag.mag_x,
-			received_packet.packet.mag.mag_y,
-			received_packet.packet.mag.mag_z);
-			// GPS GNRMC - Recomended Minimum Navigation Info
-			printf("[GNRMC] Time:%s Date:%s Status:%c Lat:%s%c Lon:%s%c Speed:%.2fkts Course:%.2f°\n",
-			received_packet.packet.gnrmc.utc_time,
-			received_packet.packet.gnrmc.date,
-			received_packet.packet.gnrmc.status,
-			received_packet.packet.gnrmc.lat,
-			received_packet.packet.gnrmc.ns,
-			received_packet.packet.gnrmc.lon,
-			received_packet.packet.gnrmc.ew,
-			received_packet.packet.gnrmc.speed_knots,
-			received_packet.packet.gnrmc.course_deg);
-			// GPS GNGGA - Fix quality and altitude data
-			printf("[GNGGA] Time:%s Lat:%.6f%c Lon:%.6f%c Fix:%d Sats:%d HDOP:%.2f Alt:%.2fm\n",
-			received_packet.packet.gngga.utc_time,
-			received_packet.packet.gngga.lat,
-			received_packet.packet.gngga.ns,
-			received_packet.packet.gngga.lon,
-			received_packet.packet.gngga.ew,
-			received_packet.packet.gngga.fix_quality,
-			received_packet.packet.gngga.num_satellites,
-			received_packet.packet.gngga.hdop,
-			received_packet.packet.gngga.altitude);
-			// GPS GNVTG - Velocity and course data
-			printf("[GNVTG] Course(T):%.2f° Course(M):%.2f° Speed:%.2fkts (%.2fkm/h)\n",
-			received_packet.packet.gnvtg.course_true,
-			received_packet.packet.gnvtg.course_magnetic,
-			received_packet.packet.gnvtg.speed_knots,
-			received_packet.packet.gnvtg.speed_kmh);
-			printf("==========================================\n\n");
-					
-        // Process packet here (SD card write, etc.)
-        // For now, just echo back to Core 0
-        queue_tlm_to_core1(&received_packet);
-    }
-}
-
-/*============================================================================*/
 /* MAIN APPLICATION                                                           */
 /*============================================================================*/
 
@@ -365,8 +238,6 @@ int main(void) {
     
     // Initialize sensors
     qmc_5883l_init(I2C_PORT);
-    ds3231_init(I2C_PORT);
-    mpu6050_init(I2C_PORT);
     
     printf("Hardware initialized\n");
     printf("==========================================\n\n");
@@ -393,7 +264,7 @@ int main(void) {
         queue_tlm_to_core1(&tlm_serial);
         
         // Receive echoed packet from Core 1
-        receive_tlm_from_core(&rcv_packet);
+        receive_tlm_from_core1(&rcv_packet);
         
         loop_count++;
         

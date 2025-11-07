@@ -41,6 +41,9 @@
         "stdlib.h": "c",
         "uart.h": "c",
         "stdio.h": "c",
-        "multicore.h": "c"
+        "multicore.h": "c",
+        "compare": "cpp",
+        "cstdint": "cpp",
+        "core1_main.h": "c"
     }
 }
